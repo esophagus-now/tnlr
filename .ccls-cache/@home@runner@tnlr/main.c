@@ -10,6 +10,9 @@ Breadcrumbs trail:
         distinguish which person picked the ID. That's basically
         like having a 33-bit ID where the top bit is different
         based on the host, so no collisions
+     -> For convenience it would just be easier if IDs were limited
+        to 31 bits. If anyone tries to open 2^31 tunnels, then we
+        can throw an error :P
   2. Set up a bufferevent that tries to connect() to the desired
      endpoint. Should work in pretty much the same way that the
      tcpconn connections work.
@@ -323,6 +326,7 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg) {
             printf("Copied out %d bytes\n", rc);
             printme[tc->data_sz] = 0;
             printf("DBG_MSG:\n\e[35m%s\e[39m\n", printme);
+            free(printme);
             break;
         }
 
@@ -335,10 +339,116 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg) {
                 bufferevent_free(tc->ev);
                 tc->ev = NULL;
             }
-            return;
+            break;
 
-        //TODO: TNLR_MSG_OPEN_TUNNEL
-        //TODO: TNLR_MSG_TUNNEL_DATA
+        case TNLR_MSG_OPEN_TUNNEL: {
+            char *data = malloc(tc->data_sz + 1); //+1 for NUL
+            int rc = evbuffer_copyout(tc->msg_data, data, tc->data_sz);
+            assert(rc >= 0);
+            data[tc->data_sz] = 0;
+            uint32_t id = ntohl(*(uint32_t*)data);
+            assert(!(id&0x80000000) && "Incoming ID too big");
+            uint16_t local_port_native = ntohs(*(uint16_t*)(data+4));
+            char *local_host = strdup((char*) data + 6);
+            free(data);
+
+            int response_code = 0;
+            
+            if (rc != 1) {
+                printf("Could not parse [%s] as an IPv4 address\n", local_host);
+                response_code = -1;
+                goto open_tunnel_error_response;
+            }
+            
+            int sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); //Nonblocking TCP socket
+            if (sfd < 0) {
+                printf("Could not open socket: [%s]\n", strerror(errno));
+                response_code = -2;
+                goto open_tunnel_error_response;
+            }
+            if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) {
+                printf("setsockopt(SO_REUSEADDR) failed\n");
+                response_code = -3;
+                goto open_tunnel_error_response;
+            }
+            if (setsockopt(sfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int)) < 0) {
+                printf("setsockopt(SO_REUSEPORT) failed\n");
+                response_code = -4;
+                goto open_tunnel_error_response;
+            }
+
+            struct bufferevent *bev = bufferevent_socket_new(eb, sfd, BEV_OPT_CLOSE_ON_FREE);
+            assert(bev && "Oops, out of memory");
+            
+            tunnel_t *tn = calloc(1, sizeof(tunnel_t));
+            assert(tn && "Oops out of memory");
+
+            tn->id = id | 0x80000000; //Mark upper bit to mark tunnels from other host
+            tn->parent = tc;
+            tn->fd = sfd;
+            tn->is_forward_tunnel = 1;
+            tn->status = TNLR_CONNECTING;
+            tn->local_host = local_host;
+            tn->local_port_native = local_port_native;
+            //FIXME: should try to get remote port so we can detect redundant tunnels
+            tn->local_ev = bev;
+            tn->next = tc->tunnels_head.next;
+            tn->prev = &tc->tunnels_head;
+            tc->tunnels_head.next = tn;
+            
+            //CONTINUE 
+            //(this is where I left off)
+            //Need to launch the bufferevent connect, which means I need all
+            //the proper callbacks...
+            bufferevent_setcb(bev, NULL, NULL, NULL, tn); //TODO: implement callbacks
+            struct timeval timeout = {30, 0}; //Allow longer timeout for when creating a tunnel
+            bufferevent_set_timeouts(bev, &timeout, &timeout);
+            
+            struct sockaddr_in local_addr;
+            local_addr.sin_family = AF_INET;
+            rc = inet_pton(AF_INET, local_host, &local_addr.sin_addr);
+            
+            bufferevent_socket_connect(
+                bev, 
+                (struct sockaddr*) &local_addr, 
+                sizeof(struct sockaddr_in)
+            );
+            
+            break;
+            
+            open_tunnel_error_response:;
+            if (sfd >= 0) close(sfd);
+            free(local_host);
+            uint32_t msg[4];
+            msg[0] = htonl(TNLR_MSG_OPEN_TUNNEL_RESPONSE);
+            msg[1] = htonl(8);
+            msg[2] = htonl(tn->id & 0x7FFFFFFF);
+            msg[3] = htonl(response_code);
+            bufferevent_write(tc->ev, msg, sizeof(msg));
+        }
+                
+        case TNLR_MSG_TUNNEL_DATA: {
+            uint32_t *data = (uint32_t *) evbuffer_pullup(tc->msg_data, 4);
+            uint32_t id = ntohl(*data);
+            //FIXME: figure out this "upper bit" rule... I think we need another
+            //field in the tunnel or something
+            evbuffer_drain(tc->msg_data, 4);
+            struct bufferevent *bev = NULL;
+            //TODO: could use hash table, but for now linear search is AOK
+            for (tunnel_t *cur = tc->tunnels_head.next; cur != &tc->tunnels_head; tc=tc->next) {
+                if (cur->id == id) {
+                    bev = cur->local_ev;
+                    break;
+                }
+            }
+            if(bev) bufferevent_write_buffer(bev, tc->msg_data); //This clears the data, right?
+            else puts("Warning, dropping data for unknown tunnel");
+
+            //Because we already cleared the data, just set tc->data_sz to 0
+            //so that the common code doesn't do anything bad
+            tc->data_sz = 0;
+            break; 
+        }
             
         default:
             fprintf(stderr, "Unknown message type [%d]\n", tc->msg_type);
