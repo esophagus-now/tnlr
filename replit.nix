@@ -1,6 +1,7 @@
 { pkgs }: {
 	deps = [
-		pkgs.groff
+		pkgs.nmap
+  pkgs.groff
   pkgs.rlwrap
   pkgs.iproute2
   pkgs.mkinitcpio-nfs-utils

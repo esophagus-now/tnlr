@@ -418,9 +418,11 @@ int tnlr_tunnel(lua_State *L)
         luaL_error(L, "Could not open socket: [%s]", strerror(errno));
     }
     if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) {
+        close(sfd);
         luaL_error(L, "setsockopt(SO_REUSEADDR) failed");
     }
     if (setsockopt(sfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int)) < 0) {
+        close(sfd);
         luaL_error(L, "setsockopt(SO_REUSEPORT) failed");
     }
     
@@ -428,19 +430,17 @@ int tnlr_tunnel(lua_State *L)
     local_addr.sin_family = AF_INET;
     local_addr.sin_addr.s_addr = INADDR_ANY;
     local_addr.sin_port = htons(local_port_native);
-    int rc = bind(sfd, (struct sockaddr*) &local_addr, sizeof(struct sockaddr_in));
-    if (rc < 0) {
+    if (bind(sfd, (struct sockaddr*) &local_addr, sizeof(struct sockaddr_in)) < 0) {
+        int errno_saved = errno;
         close(sfd);
-        luaL_error(L, "Could not bind socket to local port: [%s]", strerror(errno));
+        luaL_error(L, "Could not bind socket to local port: [%s]", strerror(errno_saved));
+    }
+    if (listen(sfd, 1) < 0) {
+        int errno_saved = errno;
+        close(sfd);
+        luaL_error(L, "Could not start listening for connections: [%s]", strerror(errno_saved));
     }
 
-    rc = accept(sfd, NULL, NULL);
-    if (rc < 0 && !(rc == EAGAIN || rc == EWOULDBLOCK)) {
-        close(sfd);
-        luaL_error(L, "Could not start accepting connections: [%s]", strerror(errno));
-    }
-    assert((rc != 0) && "Somehow we accepted right away, but this code doesn't handle that");
-    
     //Did not find an existing tunnel, so make a new object and
     //hook it up into the tcpconn's tunnels list
     cur = malloc(sizeof(tunnel_t));
@@ -457,6 +457,8 @@ int tnlr_tunnel(lua_State *L)
         fwd_tunnel_accept_cb, 
         cur
     );
+
+    puts("Awaiting connection to newly listening fwd tunnel...");
     event_add(ev, &accept_timeout);
 
     uint32_t id_native = tc->next_tunnel_id++;
@@ -568,8 +570,7 @@ static int tunnel_tostring(lua_State *L) {
     tunnel_t **tmp = (tunnel_t **) luaL_checkudata(L, 1, "tunnel");
     tunnel_t *tn = *tmp;
     char info[256];
-    int is_reverse = (tn->local_host != NULL);
-    assert(!is_reverse && "Reverse tunnels not yet supported"); //TODO: implement
+    assert(tn->is_forward_tunnel && "Reverse tunnels not yet supported"); //TODO: implement
     snprintf(
         info, sizeof(info), "tunnel{via %s:%d}[local %d, remote %s:%d]: %s",
         tn->parent->remote_host,

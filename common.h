@@ -92,9 +92,8 @@ struct _tcpconn_t {
                                //TCPCONN_EXEC_MSG state
     uint32_t data_read_so_far; //Just for convenience
 
-    //Head sentinels for tunnel linked lists
+    //Head sentinel for tunnel linked list
     tunnel_t tunnels;
-    tunnel_t tunnels_remote; //Tunnels created by remote host
 
     struct _tcpconn_t *prev, *next;
 };
@@ -108,12 +107,6 @@ extern struct event_base *eb; //Global event_base. So sue me.
 static void tcpconn_free_tunnel_lists(tcpconn_t *tc) {
     tunnel_t *curr = tc->tunnels.next;
     while (curr != &tc->tunnels) {
-        curr = curr->next; //Important to do this before freeing
-        tunnel_free(curr);
-    }
-    
-    curr = tc->tunnels_remote.next;
-    while (curr != &tc->tunnels_remote) {
         curr = curr->next; //Important to do this before freeing
         tunnel_free(curr);
     }
@@ -155,6 +148,7 @@ void tcpconn_free(tcpconn_t *tc)
 void tunnel_free(tunnel_t *t) 
 #ifdef IMPLEMENT
 {
+    puts("Freeing a tunnel for real");
     //Gracefully ignore NULL input
     if (!t) return;
 
@@ -180,6 +174,22 @@ void tunnel_free(tunnel_t *t)
     
     //Free the tunnel
     free(t);
+}
+#else
+;
+#endif
+
+tunnel_t *find_tunnel(tcpconn_t *tc, uint32_t id)
+#ifdef IMPLEMENT
+{
+    assert(tc);
+    
+    //TODO: could use hash table, but for now linear search is OK
+    for (tunnel_t *cur = tc->tunnels.next; cur != &tc->tunnels; cur=cur->next) {
+        if (cur->id == id) return cur;
+    }
+
+    return NULL;
 }
 #else
 ;

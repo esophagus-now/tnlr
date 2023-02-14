@@ -28,6 +28,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 
@@ -39,35 +40,37 @@
 #include "enums.h"
 #include "common.h"
 
-void fwd_tunnel_read_cb(struct bufferevent *bev, void *arg) 
+void tunnel_read_cb(struct bufferevent *bev, void *arg) 
 #ifdef IMPLEMENT
 {
     tunnel_t *tn = (tunnel_t *) arg;
 
-    puts("Got data from local endpoint, forwarding through fwd tunnel");
+    puts("Got data from local endpoint, forwarding through tunnel");
     
     //I hope this works!!!!!!
     struct evbuffer *in_buf = bufferevent_get_input(bev);
     uint32_t msg_type = htonl(TNLR_MSG_TUNNEL_DATA);
     uint32_t msg_len = htonl(4 + evbuffer_get_length(in_buf));
-    uint32_t id = htonl(tn->id);
+    uint32_t id = htonl(tn->id ^ 0x80000000); //Tunnels always have opposite MSB on other host);
     bufferevent_write(tn->parent->ev, &msg_type, 4);
     bufferevent_write(tn->parent->ev, &msg_len, 4);
     bufferevent_write(tn->parent->ev, &id, 4);
-    bufferevent_write_buffer(tn->parent->ev, in_buf);
+    bufferevent_write_buffer(tn->parent->ev, in_buf); //I hope this clears the buffer. The docs are a bit vague on that point
 }
 #else
 ;
 #endif
 
-void fwd_tunnel_event_cb(struct bufferevent *bev, short what, void *arg) 
+void tunnel_event_cb(struct bufferevent *bev, short what, void *arg) 
 #ifdef IMPLEMENT
 {
     tunnel_t *tn = (tunnel_t *) arg;
 
     if (what & BEV_EVENT_ERROR) {
         printf(
-            "Unknown error on forward tunnel on local port [%d]\n", tn->local_port_native
+            "Error on forward tunnel on local port [%d]: [%s]\n", 
+            tn->local_port_native,
+            evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())
         );
         //This isn't blocking.... right?
         bufferevent_free(bev);
@@ -76,13 +79,15 @@ void fwd_tunnel_event_cb(struct bufferevent *bev, short what, void *arg)
 
         uint32_t msg_type = htonl(TNLR_MSG_CLOSE_TUNNEL);
         uint32_t msg_len = htonl(4);
-        uint32_t id = htonl(tn->id);
+        uint32_t id = htonl(tn->id ^ 0x80000000); //Tunnels always have opposite MSB on other host
 
         bufferevent_write(tn->parent->ev, &msg_type, 4);
         bufferevent_write(tn->parent->ev, &msg_len, 4);
         bufferevent_write(tn->parent->ev, &id, 4);
     } else if (what & BEV_EVENT_EOF) {
         assert("Sorry, need to implement reopening tunnels automatically"); //TODO: implement
+    } else {
+        assert("???");
     }
 }
 #else
@@ -108,25 +113,28 @@ void fwd_tunnel_accept_cb(int fd, short what, void *arg)
         return;
     }
 
+    puts("Accepted on our new fwd tunnel.");
+
     //Get rid of this accepting socket and exchange for the socket
     //connection to our local endpoint
     //TODO? Hang onto info about local endpoint? For now we don't need it
+    printf("Debug: tn->fd = [%d]\n", tn->fd);
     int sfd = accept(tn->fd, NULL, NULL);
-    assert((sfd >= 0) && "Something went wrong with accept");
+    if (sfd < 0) {
+        printf("Could not accept connection for forward tunnel: [%s]\n", strerror(errno));
+        close(tn->fd);
+        tn->fd = -1;
+        puts("Giving up on this tunnel");
+        tn->status = TNLR_ERROR;
+    }
     close(tn->fd);
     tn->fd = sfd;
-
-    tn->local_ev = bufferevent_socket_new(eb, sfd, BEV_OPT_CLOSE_ON_FREE);
-    bufferevent_setcb(
-        tn->local_ev, 
-        &fwd_tunnel_read_cb, NULL, &fwd_tunnel_event_cb, 
-        tn
-    );
     
     //We can only enable the local bufferevent that reads data from
     //the local endpoint and forwards it to the remote host once we
     //receive an OPEN_TUNNEL_RESPONSE. So for now, there is nothing
     //to do yet with tn->local_ev
+    tn->local_ev = NULL;
     
     int len = strlen(tn->remote_host);
     tcpconn_t *tc = tn->parent;
@@ -136,13 +144,56 @@ void fwd_tunnel_accept_cb(int fd, short what, void *arg)
     uint32_t msg_type = htonl(TNLR_MSG_OPEN_TUNNEL);
     uint32_t msg_len = htonl(6 + len);
     uint16_t remote_port = htons(tn->remote_port_native);
-    uint32_t id = htonl(tn->id);
+    uint32_t id = htonl(tn->id ^ 0x80000000); //Tunnels always have opposite MSB on other host
 
     bufferevent_write(tc->ev, &msg_type, 4);
     bufferevent_write(tc->ev, &msg_len, 4);
     bufferevent_write(tc->ev, &id, 4);
     bufferevent_write(tc->ev, &remote_port, 2);
     bufferevent_write(tc->ev, tn->remote_host, len);
+}
+#else
+;
+#endif
+
+
+void fwd_tunnel_connect_cb(struct bufferevent *bev, short what, void *arg) 
+#ifdef IMPLEMENT
+{
+    tunnel_t *tn = (tunnel_t *) arg;
+    uint32_t response = 0;
+
+    if (what & BEV_EVENT_CONNECTED) {
+        puts("Fordward tunnel opened!!!!!!!!!!!!!");
+        bufferevent_enable(bev, EV_READ | EV_WRITE);
+        tn->status = TNLR_CONNECTED;
+        //No need for these timeouts anymore
+        bufferevent_set_timeouts(bev, NULL, NULL);
+
+        //Send successful response
+        response = 0; //0 = success, I guess
+    } else if (what & BEV_EVENT_ERROR) {
+        printf(
+            "Error on forward tunnel connection to local port [%d]: [%s]\n", 
+            tn->local_port_native,
+            evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())
+        );
+        //This isn't blocking.... right?
+        bufferevent_free(bev);
+        tn->local_ev = NULL;
+        tn->status = TNLR_ERROR;
+
+        response = -10; //TODO: need some kind of enum for this?
+    } else {
+        assert("Impossible");
+    }
+    
+    uint32_t msg[4];
+    msg[0] = htonl(TNLR_MSG_OPEN_TUNNEL_RESPONSE);
+    msg[1] = htonl(8);
+    msg[2] = htonl(tn->id ^ 0x80000000); //Tunnels always have opposite MSB on other host
+    msg[3] = htonl(response); 
+    bufferevent_write(tn->parent->ev, msg, sizeof(msg));
 }
 #else
 ;
