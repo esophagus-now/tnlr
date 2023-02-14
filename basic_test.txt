@@ -1,0 +1,22 @@
+Make sure the automatic webview is disabled. (Finally!
+There used to be now way to disable this and it was
+really difficult to do any coding that had sockets...)
+
+To run a basic test, here is what I do:
+
+1. Start the echo server (on port 2323) with:
+   $ python echo.py
+
+2. Start a "server" with:
+   $ ncat -l -p 3000 -k -m 1 -v
+
+3. Start tnlr, and its lua CLI, type:
+   tc = connect("127.0.0.1", 2323)
+   tn = tc:tunnel(2000, "127.0.0.1", 3000)
+
+4. Connect to the new tunnel with:
+   $ ncat localhost 2000
+
+Now any traffic between the two ncat instances will be
+tunneled by tnlr!
+   

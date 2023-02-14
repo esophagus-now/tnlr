@@ -115,13 +115,11 @@
 - [x] Implement `DBG_MSG` and `CLOSE` as part of bringing up the message-parsing stuff
 - [x] Implement list_open_connections and other bookeeping stuff
 - [/] Implement tunnel open and close messages
-- [ ] Implement tunnel data handling (i.e. not just dealing with
+- [x] Implement tunnel data handling (i.e. not just dealing with
       `TUNNEL_DATA` messages, but also polling our local tunnel endpoint
       so we can create the `TUNNEL_DATA` messages in the first place)
-- [ ] Figure out why connects sometimes time out and sometimes not (so weird!)
-- [ ] Figure out why I sometimes get segfaults when a connection times out
-- [ ] Tidy up the loose ends for memory management now that all the tunnel
-      stuff is in place
+- [ ] Properly deal with closed connections
+- [ ] Tidy up the loose ends for memory management
 
 ## Possible future features
 _**(`*` indicates a planned feature)**_

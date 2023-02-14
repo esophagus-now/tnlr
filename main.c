@@ -1,13 +1,20 @@
 /*
 Breadcrumbs trail:
-- In the middle of implementing tunnels (forward only rn)
-- For tunnel IDs: instead of fiddling with marking tunnels we created
-  vs those created by the other host, simply keep two linked lists instead
-  of one. Duh.
-- Need to implement close function
-- close message implementation looks iffy to me
-- In general my teardown logic is kinda bad. I left TODOs in the
-  places that need attention
+- Basic tunnels now working, but they don't close gracefully
+  when the connection is closed by the external program.
+- Also need to implement functions to let user forcibly close
+  tunnels
+- By the way, SSH tunnels will stick around even if the endpoints
+  disconnect, so we should probably implement that
+- And I need reverse tunnels...
+- And we need encryption...
+- And we need to get it working on Windows...
+- And we need DNS resolution...
+- And I should probably support UDP...
+- And it would be nice if you could connect to a file instead of
+  a network port...
+
+...man this project just keeps getting bigger
 */
 
 
