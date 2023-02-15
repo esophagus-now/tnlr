@@ -1,7 +1,7 @@
 all: main
 
 CC = clang
-override CFLAGS += -g -Wno-everything -pthread -lm -lssl -lcrypto -llua -levent
+override CFLAGS += -g -Wall -Wno-unused-command-line-argument -pthread -lm -lssl -lcrypto -llua -levent
 
 SRCS = main.c
 OBJS = $(SRCS:.c=.o)

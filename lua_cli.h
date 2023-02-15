@@ -37,6 +37,7 @@
 #include "common.h"
 #include "tcpconn_cbs.h"
 #include "tunnel_cbs.h"
+#include "os_common.h"
 
 #ifdef IMPLEMENT
 static void push_tcpconn(lua_State *L, tcpconn_t *tc) {
@@ -143,13 +144,17 @@ int tnlr_connect(lua_State *L)
     curr->tunnels.prev = &curr->tunnels;
 
     int sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); //Nonblocking TCP socket
-    if (sfd < 0) {
-        luaL_error(L, "Could not open socket: [%s]", strerror(errno));
+    if (sfd == INVALID_SOCKET) {
+        luaL_error(L, "Could not open socket: [%s]", sockstrerror(sockerrno));
     }
-    if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) {
+    if (
+        //setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0
+        evutil_make_listen_socket_reuseable(sfd) < 0 //Thank heavens for libevent
+    ) {
         luaL_error(L, "setsockopt(SO_REUSEADDR) failed");
     }
-    if (setsockopt(sfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int)) < 0) {
+    //FIXME: does REUSEPORT do anything in Windows???
+    if (fix_rc(setsockopt(sfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int))) < 0) {
         luaL_error(L, "setsockopt(SO_REUSEPORT) failed");
     }
     curr->fd = sfd;
@@ -158,9 +163,9 @@ int tnlr_connect(lua_State *L)
     local_addr.sin_family = AF_INET;
     local_addr.sin_addr.s_addr = INADDR_ANY;
     local_addr.sin_port = htons(local_port_native);
-    int rc = bind(sfd, (struct sockaddr*) &local_addr, sizeof(struct sockaddr_in));
+    int rc = fix_rc(bind(sfd, (struct sockaddr*) &local_addr, sizeof(struct sockaddr_in)));
     if (rc < 0) {
-        close(sfd);
+        closesocket(sfd);
         luaL_error(L, "Could not bind socket to local port: [%s]", strerror(errno));
     }
     
@@ -168,7 +173,7 @@ int tnlr_connect(lua_State *L)
     remote_addr.sin_family = AF_INET;
     rc = inet_pton(AF_INET, remote_host, &remote_addr.sin_addr);
     if (rc != 1) {
-        close(sfd);
+        closesocket(sfd);
         luaL_error(L, "Could not parse [%s] as an IPv4 address", remote_host);
     }
     remote_addr.sin_port = htons(remote_port_native);
@@ -414,15 +419,18 @@ int tnlr_tunnel(lua_State *L)
 
     //Bind a socket to the desired local port
     int sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); //Nonblocking TCP socket
-    if (sfd < 0) {
+    if (sfd == INVALID_SOCKET) {
         luaL_error(L, "Could not open socket: [%s]", strerror(errno));
     }
-    if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) {
-        close(sfd);
+    if (
+        //setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0
+        evutil_make_listen_socket_reuseable(sfd) < 0 //Thank heavens for libevent
+    ) {
+        closesocket(sfd);
         luaL_error(L, "setsockopt(SO_REUSEADDR) failed");
     }
     if (setsockopt(sfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int)) < 0) {
-        close(sfd);
+        closesocket(sfd);
         luaL_error(L, "setsockopt(SO_REUSEPORT) failed");
     }
     
@@ -430,15 +438,15 @@ int tnlr_tunnel(lua_State *L)
     local_addr.sin_family = AF_INET;
     local_addr.sin_addr.s_addr = INADDR_ANY;
     local_addr.sin_port = htons(local_port_native);
-    if (bind(sfd, (struct sockaddr*) &local_addr, sizeof(struct sockaddr_in)) < 0) {
-        int errno_saved = errno;
-        close(sfd);
-        luaL_error(L, "Could not bind socket to local port: [%s]", strerror(errno_saved));
+    if (fix_rc(bind(sfd, (struct sockaddr*) &local_addr, sizeof(struct sockaddr_in))) < 0) {
+        int errno_saved = sockerrno;
+        closesocket(sfd);
+        luaL_error(L, "Could not bind socket to local port: [%s]", sockstrerror(errno_saved));
     }
-    if (listen(sfd, 1) < 0) {
-        int errno_saved = errno;
-        close(sfd);
-        luaL_error(L, "Could not start listening for connections: [%s]", strerror(errno_saved));
+    if (fix_rc(listen(sfd, 1)) < 0) {
+        int errno_saved = sockerrno;
+        closesocket(sfd);
+        luaL_error(L, "Could not start listening for connections: [%s]", sockstrerror(errno_saved));
     }
 
     //Did not find an existing tunnel, so make a new object and

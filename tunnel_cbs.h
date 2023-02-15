@@ -39,6 +39,7 @@
 
 #include "enums.h"
 #include "common.h"
+#include "os_common.h"
 
 void tunnel_read_cb(struct bufferevent *bev, void *arg) 
 #ifdef IMPLEMENT
@@ -119,15 +120,15 @@ void fwd_tunnel_accept_cb(int fd, short what, void *arg)
     //connection to our local endpoint
     //TODO? Hang onto info about local endpoint? For now we don't need it
     printf("Debug: tn->fd = [%d]\n", tn->fd);
-    int sfd = accept(tn->fd, NULL, NULL);
-    if (sfd < 0) {
+    sockfd sfd = accept(tn->fd, NULL, NULL);
+    if (sfd == INVALID_SOCKET) {
         printf("Could not accept connection for forward tunnel: [%s]\n", strerror(errno));
         close(tn->fd);
         tn->fd = -1;
         puts("Giving up on this tunnel");
         tn->status = TNLR_ERROR;
     }
-    close(tn->fd);
+    closesocket(tn->fd);
     tn->fd = sfd;
     
     //We can only enable the local bufferevent that reads data from
@@ -199,4 +200,6 @@ void fwd_tunnel_connect_cb(struct bufferevent *bev, short what, void *arg)
 ;
 #endif
 
+#else
+#undef SHOULD_INCLUDE
 #endif

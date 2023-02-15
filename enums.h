@@ -102,4 +102,6 @@ typedef enum {
 } tcpconn_state_e;
 #endif
 
+#else
+#undef SHOULD_INCLUDE
 #endif

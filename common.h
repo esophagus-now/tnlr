@@ -39,6 +39,7 @@
 #include <event2/util.h>
 
 #include "enums.h"
+#include "os_common.h"
 
 #ifndef IMPLEMENT
 struct _tcpconn_t;
@@ -48,7 +49,7 @@ typedef struct _tunnel_t {
     uint32_t id;
     int lua_refcount;
     tcpconn_t *parent;
-    int fd;
+    sockfd fd;
     int is_forward_tunnel;
     status_e status;
     char *local_host;
@@ -70,7 +71,7 @@ struct _tcpconn_t {
     int lua_refcount;
     uint32_t next_tunnel_id;
 
-    int fd;
+    sockfd fd;
     status_e status;
 
     uint16_t local_port_native;
@@ -195,4 +196,6 @@ tunnel_t *find_tunnel(tcpconn_t *tc, uint32_t id)
 ;
 #endif
 
+#else
+#undef SHOULD_INCLUDE
 #endif

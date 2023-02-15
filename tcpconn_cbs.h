@@ -39,6 +39,7 @@
 #include "enums.h"
 #include "common.h"
 #include "tunnel_cbs.h"
+#include "os_common.h"
 
 void tcpconn_connect_cb(struct bufferevent *bev, short what, void *arg) 
 #ifdef IMPLEMENT
@@ -138,6 +139,7 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg)
         case TNLR_MSG_DBG_MSG: {
             char *printme = (char *) malloc(tc->data_sz + 1); //+1 for NUL
             int rc = evbuffer_copyout(tc->msg_data, printme, tc->data_sz);
+            assert(rc == tc->data_sz);
             //printf("Copied out %d bytes\n", rc);
             printme[tc->data_sz] = 0;
             printf("DBG_MSG:\n\e[35m%s\e[39m\n", printme);
@@ -169,13 +171,16 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg)
 
             int response_code = 0;
             
-            int sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); //Nonblocking TCP socket
+            sockfd sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); //Nonblocking TCP socket
             if (sfd < 0) {
                 printf("Could not open socket: [%s]\n", strerror(errno));
                 response_code = -2;
                 goto open_tunnel_error_response;
             }
-            if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) {
+            if (
+                //setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0
+                evutil_make_listen_socket_reuseable(sfd) < 0 //Thank heavens for libevent
+            ) {
                 printf("setsockopt(SO_REUSEADDR) failed\n");
                 response_code = -3;
                 goto open_tunnel_error_response;
@@ -245,7 +250,7 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg)
             break;
             
             open_tunnel_error_response:;
-            if (sfd >= 0) close(sfd);
+            if (sfd != INVALID_SOCKET) closesocket(sfd);
             free(local_host);
             uint32_t msg[4];
             msg[0] = htonl(TNLR_MSG_OPEN_TUNNEL_RESPONSE);
@@ -345,4 +350,6 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg)
 ;
 #endif
 
+#else
+#undef SHOULD_INCLUDE
 #endif

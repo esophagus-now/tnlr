@@ -38,6 +38,7 @@ Breadcrumbs trail:
 #include "lua_cli.h"
 #include "tcpconn_cbs.h"
 #include "tunnel_cbs.h"
+#include "os_common.h"
 
 tcpconn_t tcpconns; //Global list of open tcpconns. So sue me.
 struct event_base *eb; //Global event_base. So sue me.
@@ -74,6 +75,9 @@ void read_stdin_cb(evutil_socket_t sock, short what, void *arg) {
 }
 
 int main(int arc, char *argv[]) { 
+    
+    os_common_startup();
+    
     tcpconns.prev = &tcpconns;
     tcpconns.next = &tcpconns;
     
@@ -102,6 +106,8 @@ int main(int arc, char *argv[]) {
     event_free(stdin_ev);
     event_base_free(eb);
     lua_close(L);
+
+    os_common_cleanup();
     
     return 0;
 }
