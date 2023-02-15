@@ -238,27 +238,10 @@
     #define fix_rc(x) (x)
     #define sockerrno errno
     #define sockstrerror(x) strerror(x)
+    #define os_common_startup() 
+    #define os_common_cleanup() 
     #endif
-    
-    int os_common_startup() 
-    #ifndef IMPLEMENT
-    ;
-    #else 
-    {
-        return 0;
-    }
-    #endif
-    
-    
-    void os_common_cleanup() 
-    #ifndef IMPLEMENT
-    ;
-    #else 
-    {
-        return;
-    }
-    #endif
-    
+
 #endif
 /* At this point, the following API can be used on either Linux or Windows:
 // - poll can be used as normal, except for some subtle bug ms won't fix
