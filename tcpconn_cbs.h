@@ -327,11 +327,13 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg)
                 break;
             }
             printf("Closing tunnel on [%s:%d]\n", tn->local_host, tn->local_port_native);
-            
-            bufferevent_free(tn->local_ev);
-            tn->local_ev = NULL;
-            tn->fd = -1;
-            tn->status = TNLR_CLOSED;
+
+            if (tn->status != TNLR_CLOSED && tn->status != TNLR_ERROR) {
+                bufferevent_free(tn->local_ev);
+                tn->local_ev = NULL;
+                tn->fd = -1;
+                tn->status = TNLR_CLOSED;
+            }
             break;
         }
             
