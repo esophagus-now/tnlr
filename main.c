@@ -73,10 +73,6 @@ void read_stdin_cb(evutil_socket_t sock, short what, void *arg) {
     }
 }
 
-void print_event_msg(int sev, char const *msg) {
-    puts(msg);
-}
-
 int main(int arc, char *argv[]) { 
     
     os_common_startup();
@@ -89,9 +85,6 @@ int main(int arc, char *argv[]) {
     lua_State *L = luaL_newstate();
     luaopen_base(L);
     luaopen_tnlr(L);
-    
-    event_enable_debug_mode();
-    event_set_log_callback(print_event_msg);
     
     eb = event_base_new();
 
