@@ -42,10 +42,16 @@
 /////////////////////////////
 // Definitions for Windows //
 /////////////////////////////
-
+    #define WIN32_LEAN_AND_MEAN 
     #include <winsock2.h>
     #include <Ws2tcpip.h>
     
+    #ifndef IMPLEMENT
+    #define WINDOWS 1
+    #endif
+    
+    //So I guess Ws2tcpip has this now???
+    #if 0
     //From https://stackoverflow.com/a/20816961/2737696
 	int inet_pton(int af, const char *src, void *dst)
     #ifndef IMPLEMENT
@@ -74,13 +80,13 @@
 	  return 0;
 	}
     #endif
+    #endif
     
     #ifndef IMPLEMENT
     typedef SOCKET sockfd;
+    #define sockwrite(x,y,z) send(x,y,z,0)
+    #define sockread(x,y,z) recv(x,y,z,0)
     #endif
-    
-    #define write(x,y,z) send(x,y,z,0)
-    #define read(x,y,z) recv(x,y,z,0)
     
     //Good lord this is complicated... from:
     //https://docs.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-wsastartup
@@ -191,7 +197,9 @@
     #include <stdint.h> // portable: uint64_t   MSVC: __int64 
 
     struct timezone;
-
+    
+    //Maybe mingw really is improving
+    #if 0
     int gettimeofday(struct timeval * tp, struct timezone * tzp)
     #ifndef IMPLEMENT
     ;
@@ -217,6 +225,7 @@
         return 0;
     }
     #endif
+    #endif
     
 #else
     ///////////////////////////
@@ -235,6 +244,8 @@
     typedef int sockfd;
     #define INVALID_SOCKET -1
     #define closesocket(x) close(x)
+    #define sockread read
+    #define sockwrite write
     #define fix_rc(x) (x)
     #define sockerrno errno
     #define sockstrerror(x) strerror(x)
@@ -257,6 +268,7 @@
 //	 into sockstrerror()
 // - Use sockerrno instead of errno
 // - Use sockstrerror(x) instead of strerror(x)
+// - Use sockread and sockwrite instead of read and write?
 */
 
 #else

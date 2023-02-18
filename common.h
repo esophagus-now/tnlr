@@ -134,10 +134,10 @@ void tcpconn_free(tcpconn_t *tc)
 
     tcpconn_free_tunnel_lists(tc);
 
-    evbuffer_free(tc->msg_data);
+    if (tc->msg_data) evbuffer_free(tc->msg_data);
     
     //Free all the malloc'ed fields within this tc
-    free(tc->remote_host);
+    if(tc->remote_host) free(tc->remote_host);
     if(tc->ev) bufferevent_free(tc->ev);
 
     free(tc);

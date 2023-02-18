@@ -30,7 +30,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
-#include <arpa/inet.h>
+//#include <arpa/inet.h> //Should be covered by os_common.h
 
 #include <event2/event.h>
 #include <event2/bufferevent.h>
@@ -95,7 +95,7 @@ void tunnel_event_cb(struct bufferevent *bev, short what, void *arg)
 ;
 #endif
 
-void fwd_tunnel_accept_cb(int fd, short what, void *arg) 
+void fwd_tunnel_accept_cb(evutil_socket_t fd, short what, void *arg) 
 #ifdef IMPLEMENT
 {
     tunnel_t *tn = (tunnel_t *) arg;
@@ -119,7 +119,7 @@ void fwd_tunnel_accept_cb(int fd, short what, void *arg)
     //Get rid of this accepting socket and exchange for the socket
     //connection to our local endpoint
     //TODO? Hang onto info about local endpoint? For now we don't need it
-    printf("Debug: tn->fd = [%d]\n", tn->fd);
+    //printf("Debug: tn->fd = [%d]\n", tn->fd);
     sockfd sfd = accept(tn->fd, NULL, NULL);
     if (sfd == INVALID_SOCKET) {
         printf("Could not accept connection for forward tunnel: [%s]\n", strerror(errno));

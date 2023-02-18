@@ -29,7 +29,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <arpa/inet.h>
+//#include <arpa/inet.h> //Should be covered by os_common.h
 
 #include <event2/event.h>
 #include <event2/bufferevent.h>
@@ -57,6 +57,7 @@ void tcpconn_connect_cb(struct bufferevent *bev, short what, void *arg)
         puts("Connnection timed out. Try again?");
         //This isn't blocking.... right?
         bufferevent_free(bev);
+        tc->fd = INVALID_SOCKET;
         tc->ev = NULL;
         tc->status = TNLR_ERROR;
     }
@@ -86,16 +87,17 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg)
             /* Not enough data in the buffer */
             return;
         } else {
-            uint32_t tmp;
-            memcpy(&tmp, mem, 4);
-            tc->msg_type = ntohl(tmp);
+            uint32_t msg_type;
+            memcpy(&msg_type, mem, 4);
+            tc->msg_type = ntohl(msg_type);
             /*printf(
                 "Message type = %d (%s), ", 
                 tc->msg_type, 
                 TNLR_MSG_TYPE_STRINGS[tc->msg_type]
             );*/
-            memcpy(&tmp, mem + 4, 4);
-            tc->data_sz = ntohl(tmp);
+            uint32_t msg_sz;
+            memcpy(&msg_sz, mem + 4, 4);
+            tc->data_sz = ntohl(msg_sz);
             //printf("Data size = %d\n", tc->data_sz);
             /* Actually remove the data from the buffer now that we know we
                like it. */
@@ -139,7 +141,7 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg)
         case TNLR_MSG_DBG_MSG: {
             char *printme = (char *) malloc(tc->data_sz + 1); //+1 for NUL
             int rc = evbuffer_copyout(tc->msg_data, printme, tc->data_sz);
-            assert(rc == tc->data_sz);
+            assert(rc == (int)tc->data_sz);
             //printf("Copied out %d bytes\n", rc);
             printme[tc->data_sz] = 0;
             printf("DBG_MSG:\n\e[35m%s\e[39m\n", printme);
@@ -171,10 +173,16 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg)
 
             int response_code = 0;
             
-            sockfd sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); //Nonblocking TCP socket
+            sockfd sfd = socket(AF_INET, SOCK_STREAM, 0);
             if (sfd < 0) {
-                printf("Could not open socket: [%s]\n", strerror(errno));
+                printf("Could not open socket: [%s]\n", sockstrerror(sockerrno));
                 response_code = -2;
+                goto open_tunnel_error_response;
+            }
+            //Make this a nonblocking TCP socket (thanks libevent!)
+            if (evutil_make_socket_nonblocking(sfd) < 0) {
+                printf("Could not make socket nonblocking: [%s]\n", sockstrerror(sockerrno));
+                response_code = -1000;
                 goto open_tunnel_error_response;
             }
             if (
@@ -185,11 +193,13 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg)
                 response_code = -3;
                 goto open_tunnel_error_response;
             }
+            #ifndef WINDOWS
             if (setsockopt(sfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int)) < 0) {
                 printf("setsockopt(SO_REUSEPORT) failed\n");
                 response_code = -4;
                 goto open_tunnel_error_response;
             }
+            #endif
 
             { //Anonymous braces to prevent goto problem
             struct bufferevent *bev = bufferevent_socket_new(eb, sfd, BEV_OPT_CLOSE_ON_FREE);
@@ -264,10 +274,8 @@ void tcpconn_read_cb(struct bufferevent *bev, void *arg)
             uint32_t *data = (uint32_t *) evbuffer_pullup(tc->msg_data, 4);
             uint32_t id = ntohl(*data); //Only sender toggles MSB
             evbuffer_drain(tc->msg_data, 4);
-            struct bufferevent *bev = NULL;
             tunnel_t *tn = find_tunnel(tc, id);
-            if (tn) bev = tn->local_ev;
-            if(bev) bufferevent_write_buffer(bev, tc->msg_data); //This clears the data, right?
+            if (tn) bufferevent_write_buffer(tn->local_ev, tc->msg_data); //This clears the data, right?
             else printf("Warning, dropping data for unknown tunnel [%#08x]\n", id);
 
             //Because we already cleared the data, just set tc->data_sz to 0

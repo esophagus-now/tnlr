@@ -66,7 +66,7 @@ int tnlr_connect(lua_State *L)
     /*
     Check if a connection is already open to the desired endpoint.
     If so, just return that, taking care to increment the refcount.
-    Otherwise, alloc a new tcpconn object with status CONNECTIING.
+    Otherwise, alloc a new tcpconn object with status CONNECTING.
     Create a new socket with O_NONBLOCK and bind it to the given
     local_port (if that was requested). By the way, we will check
     for errors everywhere. After that we will parse the host and
@@ -112,6 +112,8 @@ int tnlr_connect(lua_State *L)
                 goto tnlr_connect_return;
             } else {
                 //This tcpconn was dead, so just reuse it
+                //TODO: check if I need to free any of the fields before
+                //reusing to prevent memory leaks
                 break;
             }
         }
@@ -120,7 +122,7 @@ int tnlr_connect(lua_State *L)
 
     if (curr == &tcpconns) {
         //No existing connection was found, so create a new one
-        curr = malloc(sizeof(tcpconn_t));
+        curr = (tcpconn_t*) calloc(1, sizeof(tcpconn_t));
         assert(curr && "Oops, out of memory");
         curr->prev = tcpconns.prev;
         tcpconns.prev->next = curr;
@@ -137,26 +139,40 @@ int tnlr_connect(lua_State *L)
         curr->local_port_native = local_port_native;
         curr->msg_data = evbuffer_new();
     }
-
+    
+    //Anonymous braces to prevent goto error
+    {
     curr->status = TNLR_CONNECTING;
     curr->local_port_native = local_port_native;
     curr->tunnels.next = &curr->tunnels;
     curr->tunnels.prev = &curr->tunnels;
 
-    int sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); //Nonblocking TCP socket
+    sockfd sfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sfd == INVALID_SOCKET) {
         luaL_error(L, "Could not open socket: [%s]", sockstrerror(sockerrno));
+    }
+    //Make this a nonblocking TCP socket (thanks libevent!)
+    if (evutil_make_socket_nonblocking(sfd) < 0) {
+        closesocket(sfd);
+        luaL_error(
+            L,
+            "Could not make socket nonblocking: [%s]\n", 
+            sockstrerror(sockerrno)
+        );
     }
     if (
         //setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0
         evutil_make_listen_socket_reuseable(sfd) < 0 //Thank heavens for libevent
     ) {
+        closesocket(sfd);
         luaL_error(L, "setsockopt(SO_REUSEADDR) failed");
     }
-    //FIXME: does REUSEPORT do anything in Windows???
+    #ifndef WINDOWS
     if (fix_rc(setsockopt(sfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int))) < 0) {
+        closesocket(sfd);
         luaL_error(L, "setsockopt(SO_REUSEPORT) failed");
     }
+    #endif
     curr->fd = sfd;
     
     struct sockaddr_in local_addr;
@@ -189,6 +205,7 @@ int tnlr_connect(lua_State *L)
         (struct sockaddr*) &remote_addr, 
         sizeof(struct sockaddr_in)
     );
+    } //End anonymous braces
     
     tnlr_connect_return:;
     push_tcpconn(L, curr);
@@ -416,11 +433,21 @@ int tnlr_tunnel(lua_State *L)
         }
         cur = cur->next;
     }
-
+    
+    { //Anonymous braces to prevent goto error
     //Bind a socket to the desired local port
-    int sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); //Nonblocking TCP socket
+    sockfd sfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sfd == INVALID_SOCKET) {
         luaL_error(L, "Could not open socket: [%s]", strerror(errno));
+    }
+    //Make this a nonblocking TCP socket (thanks libevent!)
+    if (evutil_make_socket_nonblocking(sfd) < 0) {
+        closesocket(sfd);
+        luaL_error(
+            L,
+            "Could not make socket nonblocking: [%s]\n", 
+            sockstrerror(sockerrno)
+        );
     }
     if (
         //setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0
@@ -429,10 +456,12 @@ int tnlr_tunnel(lua_State *L)
         closesocket(sfd);
         luaL_error(L, "setsockopt(SO_REUSEADDR) failed");
     }
+    #ifndef WINDOWS
     if (setsockopt(sfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int)) < 0) {
         closesocket(sfd);
         luaL_error(L, "setsockopt(SO_REUSEPORT) failed");
     }
+    #endif
     
     struct sockaddr_in local_addr;
     local_addr.sin_family = AF_INET;
@@ -451,7 +480,7 @@ int tnlr_tunnel(lua_State *L)
 
     //Did not find an existing tunnel, so make a new object and
     //hook it up into the tcpconn's tunnels list
-    cur = malloc(sizeof(tunnel_t));
+    cur = (tunnel_t*) calloc(1, sizeof(tunnel_t));
     assert(cur && "oops out of memory");
     
     //Now we can start up an async accept call. According to libevent,
@@ -484,6 +513,7 @@ int tnlr_tunnel(lua_State *L)
     cur->next = (tc->tunnels.next)->next;
     tc->tunnels.next = cur;
     cur->prev = &tc->tunnels;
+    } //End anonymous braces
     
     tnlr_tunnel_return:;
     push_tunnel(L, cur);
@@ -600,10 +630,17 @@ static int tunnel_gc(lua_State *L) {
     /*
     The udata is just a pointer to a tunnel in that global linked
     list. We then decrement its lua_refcount. If the refcount goes to
-    zero, we need to see if it is safe to free this tunnel. There is
-    one reasons why it wouldn't be safe, and we check for it:
+    zero, we need to see if it is safe to free this tunnel. There are
+    two reasons why it wouldn't be safe, and we check for them:
         1. Check if this connection is still open (i.e. the TCP socket is
            still open)
+        <strikethrough>
+        2. If the tcpconn parent of this tunnel still has lua_references,
+           then we could use list_connections to find this tunnel. Except
+           no, because if this tunnel is not open we're going to remove it
+           from the tcpconn's list of tunnels anwyay, so list_tunnels 
+           wouldn't find it
+        </strikethrough>
     If any of those are true we do not free the tcpconn object. If both 
     are false, we do. (And obviously remove it from the linked list)
     */

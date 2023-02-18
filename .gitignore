@@ -1,5 +1,7 @@
 .ccls-cache
 .breakpoints
 *.d
+*.d.*
 *.o
 main
+main.exe
